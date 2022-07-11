@@ -91,6 +91,7 @@ class HubMAP_Dataset(Dataset):
         # Image/Mask Loading
         img = Image.open(os.path.join(INPUT_PATH, "train_images", img_path))
         img = np.array(img)
+        img= cv2.resize(img,(1024,1024))
         mask = rle_decode(self.input.iloc[ndx, -3], shape)
         mask=cv2.resize(mask,(1024,1024))
         mask[mask>0.5]=1
@@ -128,12 +129,14 @@ val_ds = HubMAP_Dataset(train=False)
 val_loader = DataLoader(val_ds, batch_size=4,shuffle=True)
 
 # Training Loop
-minloss=10
-val_interval = 2
+# Training Loop
+minloss=10  #比较loss
+recordmetric=0.5 #比较val验证集
+val_interval = 1  #几个epoch val一次
 
 num_epochs = 200
 epoch_loss_values = list()
-metric_values = list()
+
 writer = SummaryWriter()
 for epoch in range(num_epochs):
     print("-" * 10)
@@ -157,11 +160,30 @@ for epoch in range(num_epochs):
     epoch_loss /= step
     epoch_loss_values.append(epoch_loss)
     print(f"epoch {epoch + 1} average loss: {epoch_loss:.4f}")
+    if (epoch +1 ) % val_interval == 0:
+        model.eval()
+        with torch.no_grad():
+            val_images = None
+            val_labels = None
+            val_outputs = None
+            for val_data in tqdm(val_loader):
+                val_images, val_labels = val_data[0].to(device), val_data[1].to(device)
+                val_outputs = model(val_images)
+                #val_outputs = [post_trans(i) for i in decollate_batch(val_outputs)]
+                # compute metric for current iteration
+                dice_metric(y_pred=val_outputs, y=val_labels)
+            # aggregate the final mean dice result
+            metric = dice_metric.aggregate().item()
+            print('metric',metric)
+            if metric>recordmetric:
+              print('saved new best metric model')
+              torch.save(model.state_dict(), "bestmetric.pth")
+            # reset the status for next validation round
+            dice_metric.reset()
 
 
     if epoch_loss < minloss:
                 minloss=epoch_loss
                 best_metric_epoch = epoch + 1
-                torch.save(model.state_dict(), "best_metric_model_segmentation2d_array.pth")
-                print("saved new best metric model")
-
+                torch.save(model.state_dict(), "best.pth")
+                print("saved new best loss model")
