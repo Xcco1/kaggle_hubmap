@@ -31,7 +31,7 @@ from monai.transforms import (
     EnsureType,
 )
 
-INPUT_PATH = "E:/hubmap-organ-segmentation"
+INPUT_PATH = '/home/leadmove/dataset/Kaggle/'
 
 # IMG Settings
 
@@ -92,7 +92,7 @@ class HubMAP_Dataset(Dataset):
         img = Image.open(os.path.join(INPUT_PATH, "train_images", img_path))
         img = np.array(img)
         mask = rle_decode(self.input.iloc[ndx, -3], shape)
-        mask=cv2.resize(mask,(512,512))
+        mask=cv2.resize(mask,(1024,1024))
         mask[mask>0.5]=1
         mask[mask<=0.5]=0
         '''if self.train:
@@ -111,8 +111,12 @@ class HubMAP_Dataset(Dataset):
 from model import UneXt50
 
 model=UneXt50().to(device)
+#model.load_state_dict(torch.load("./best_metric_model_segmentation2d_array.pth"))
 loss_function = monai.losses.DiceLoss(sigmoid=False)
+from monai.losses import FocalLoss
+focal=FocalLoss()
 optimizer = torch.optim.Adam(model.parameters(), 1e-3)
+schedule = torch.optim.lr_scheduler.StepLR(optimizer, step_size=40, gamma=0.5)
 post_trans = Compose([EnsureType(), Activations(sigmoid=True), AsDiscrete(threshold=0.5)])
 dice_metric = DiceMetric(include_background=True, reduction="mean", get_not_nans=False)
 
@@ -123,14 +127,11 @@ train_loader = DataLoader(train_ds, batch_size=4,num_workers=0,shuffle=True)
 val_ds = HubMAP_Dataset(train=False)
 val_loader = DataLoader(val_ds, batch_size=4,shuffle=True)
 
-
-
-
 # Training Loop
 minloss=10
 val_interval = 2
 
-num_epochs = 50
+num_epochs = 200
 epoch_loss_values = list()
 metric_values = list()
 writer = SummaryWriter()
@@ -143,16 +144,16 @@ for epoch in range(num_epochs):
     for batch_data in tqdm(train_loader):
         step += 1
         inputs, labels = batch_data[0].to(device), batch_data[1].to(device)
-        optimizer.zero_grad()
         outputs = model(inputs)
-        print(labels.shape)
-        loss = loss_function(outputs, labels)
+        loss = loss_function(outputs, labels)+focal(outputs, labels)
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         epoch_loss += loss.item()
         epoch_len = len(train_ds) // train_loader.batch_size
         #print(f"{step}/{epoch_len}, train_loss: {loss.item():.4f}")
         writer.add_scalar("train_loss", loss.item(), epoch_len * epoch + step)
+    schedule.step()
     epoch_loss /= step
     epoch_loss_values.append(epoch_loss)
     print(f"epoch {epoch + 1} average loss: {epoch_loss:.4f}")
